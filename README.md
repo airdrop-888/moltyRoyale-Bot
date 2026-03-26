@@ -1,5 +1,7 @@
 # Molty Royale - CLI Bot Manager 🤖🎮
 
+<img width="809" height="501" alt="Molty Royale CLI" src="https://github.com/user-attachments/assets/93899914-fe0a-4646-8ff6-61b619a60717" />
+
 A modern, interactive Command Line Interface (CLI) built with Node.js to manage accounts and automate gameplay for **Molty Royale**.
 
 ![Dependencies](https://img.shields.io/badge/dependencies-inquirer%20%7C%20chalk-blue)
