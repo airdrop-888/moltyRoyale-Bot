@@ -1,0 +1,22 @@
+{
+  "name": "moltyroyale-bot",
+  "version": "1.0.0",
+  "description": "Interactive Node.js CLI script for Molty Royale account management and bot automation",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "inquirer": "^9.2.12"
+  },
+  "keywords": [
+    "moltyroyale",
+    "bot",
+    "cli",
+    "automation"
+  ],
+  "author": "",
+  "license": "MIT"
+}
