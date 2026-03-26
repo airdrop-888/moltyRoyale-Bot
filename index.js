@@ -12,6 +12,7 @@
 import inquirer from 'inquirer';
 import chalk from 'chalk';
 import fs from 'fs';
+import { ethers } from 'ethers';
 
 const ACCOUNTS_FILE = 'accounts.txt';
 const BASE_URL = 'https://cdn.moltyroyale.com/api';
@@ -203,9 +204,10 @@ async function createAccount() {
     { type: 'input', name: 'botName', message: 'Enter Bot Name:' }
   ]);
 
-  // Automatically generate a valid random EVM dummy address
-  const walletAddress = '0x' + [...Array(40)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
-
+  // Generate a real EVM wallet
+  const wallet = ethers.Wallet.createRandom();
+  const walletAddress = wallet.address;
+  const privateKey = wallet.privateKey;
   try {
     const response = await fetch(`${BASE_URL}/accounts`, {
       method: 'POST',
@@ -231,18 +233,17 @@ async function createAccount() {
     console.log(chalk.bold('Balance: ') + chalk.yellow(data.balance !== undefined ? data.balance : 0));
     console.log(chalk.green('-----------------------\n'));
 
-    const apiKey = data.apiKey || data.api_key;
-
     if (!apiKey) {
       console.log(chalk.red('API Key was not returned by the server. Account not saved.\n'));
       return await mainMenu();
     }
 
-    const line = `${apiKey}||${walletAddress}|`;
+    // Format: API_KEY||WALLET_ADDRESS||PRIVATE_KEY|
+    const line = `${apiKey}||${walletAddress}||${wallet.privateKey}|`;
     fs.appendFileSync(ACCOUNTS_FILE, line + '\n');
-    console.log(chalk.cyan(`Saved to ${ACCOUNTS_FILE} successfully.\n`));
-    console.log(chalk.yellow(`⚠ apiKey is only fully visible here. Save it securely!\n`));
-
+    
+    console.log(chalk.cyan(`Saved to ${ACCOUNTS_FILE} successfully.`));
+    console.log(chalk.yellow(`⚠ Please backup the Private Key securely if you plan to use this EVM wallet!\n`));
   } catch (err) {
     console.error(chalk.red('Error creating account:'), err);
   }
@@ -265,7 +266,7 @@ async function playAgent() {
   }
 
   const choices = lines.map(line => {
-    // Expected strict format: API_KEY||WALLET_ADDRESS|
+    // Expected strict format: API_KEY||WALLET_ADDRESS||PRIVATE_KEY|
     const parts = line.split('||');
     const api_key = parts[0];
     const wallet = parts[1] ? parts[1].replace('|', '') : '';
