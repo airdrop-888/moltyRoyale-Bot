@@ -203,7 +203,6 @@ async function createAccount() {
     { type: 'input', name: 'botName', message: 'Enter Bot Name:' }
   ]);
 
-  // Use the dummy wallet address as requested for the payload
   const walletAddress = "0xYourAgentEOA";
 
   try {
@@ -212,23 +211,36 @@ async function createAccount() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: answers.botName, wallet_address: walletAddress })
     });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.log(chalk.red('\nFailed to create account.'));
+      console.log(chalk.red(`Status: ${response.status} ${response.statusText}`));
+      console.log(chalk.red(`Response: ${errText}\n`));
+      return await mainMenu();
+    }
     
-    // Attempt gracefully parsing the json response 
     const resBase = await response.json();
     const data = resBase.data || resBase;
 
     console.log(chalk.green('\n--- Account Created ---'));
     console.log(chalk.bold('Name: ') + chalk.white(data.name || answers.botName));
-    console.log(chalk.bold('Account ID: ') + chalk.white(data.id || data.accountId || 'N/A'));
+    console.log(chalk.bold('Account ID: ') + chalk.white(data.accountId || data.id || 'N/A'));
     console.log(chalk.bold('Public ID: ') + chalk.white(data.publicId || data.public_id || 'N/A'));
-    console.log(chalk.bold('Balance: ') + chalk.yellow(data.balance || 0));
+    console.log(chalk.bold('Balance: ') + chalk.yellow(data.balance !== undefined ? data.balance : 0));
     console.log(chalk.green('-----------------------\n'));
 
-    const apiKey = data.apiKey || data.api_key || data.key || data.id || 'GENERATED_API_KEY';
+    const apiKey = data.apiKey || data.api_key;
+
+    if (!apiKey) {
+      console.log(chalk.red('API Key was not returned by the server. Account not saved.\n'));
+      return await mainMenu();
+    }
 
     const line = `${apiKey}||${walletAddress}|`;
     fs.appendFileSync(ACCOUNTS_FILE, line + '\n');
-    console.log(chalk.cyan(`Saved to ${ACCOUNTS_FILE} successfully.`));
+    console.log(chalk.cyan(`Saved to ${ACCOUNTS_FILE} successfully.\n`));
+    console.log(chalk.yellow(`⚠ apiKey is only fully visible here. Save it securely!\n`));
 
   } catch (err) {
     console.error(chalk.red('Error creating account:'), err);
