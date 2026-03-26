@@ -96,49 +96,52 @@ function printDashboard(gameName, agentName, agentId, state, actionLogs, errorMs
 
 // Provided Bot Strategy Logic
 async function runBotLoop(API_KEY, WALLET_ADDRESS) {
-  // 1. Find available game (oldest waiting free game)
-  let GAME_ID = null;
-  let selectedGame = null;
-
   global.isBotRunning = true;
-  console.log(chalk.cyan('Searching for available free games...'));
+  console.log(chalk.cyan('\nStarting Bot Auto-Looping Interface...'));
 
+  // Outer loop to keep bot running across multiple games or failed joins
   while (global.isBotRunning) {
-    try {
-      const gamesRes = await fetch(`${BASE_URL}/games?status=waiting&entryType=free`);
-      const { data: games } = await gamesRes.json();
+    // 1. Find available free game
+    let GAME_ID = null;
+    let selectedGame = null;
 
-      const freeGames = games?.filter(g => g.entryType === 'free') || [];
+    while (global.isBotRunning) {
+      try {
+        const gamesRes = await fetch(`${BASE_URL}/games?status=waiting&entryType=free`);
+        const { data: games } = await gamesRes.json();
 
-      if (freeGames.length > 0) {
-        selectedGame = freeGames[0];
-        GAME_ID = selectedGame.id;
-        break; // found a game, break the wait loop
+        const freeGames = games?.filter(g => g.entryType === 'free') || [];
+
+        if (freeGames.length > 0) {
+          selectedGame = freeGames[0];
+          GAME_ID = selectedGame.id;
+          break; // found a game, break the search loop
+        }
+
+        process.stdout.write(`\r📡 ${chalk.yellow(`[${new Date().toLocaleTimeString()}] Scanning for FREE tournaments... (Retrying in 10s)`)}       `);
+      } catch (err) {
+        process.stdout.write(`\r⚠️  ${chalk.red(`[${new Date().toLocaleTimeString()}] Network error searching games. (Retrying in 10s)`)}       `);
       }
-
-      process.stdout.write(`\r📡 ${chalk.yellow(`[${new Date().toLocaleTimeString()}] Scanning for FREE tournaments... (Retrying in 10s)`)} `);
-    } catch (err) {
-      process.stdout.write(`\r⚠️  ${chalk.red(`[${new Date().toLocaleTimeString()}] Network error searching games. (Retrying in 10s)`)} `);
+      await sleepAndCheck(10000);
     }
-    await sleepAndCheck(10000);
-  }
 
-  if (!global.isBotRunning) return; // User stopped the script
+    if (!global.isBotRunning) return; // User stopped the script
 
-  console.log(chalk.blue(`\nJoining game: ${selectedGame.name} (ID: ${GAME_ID})`));
+    console.log(chalk.blue(`\n\nAttemping to join game: ${selectedGame.name} (ID: ${GAME_ID})`));
 
-  // 2. Register agent
-  const registerRes = await fetch(`${BASE_URL}/games/${GAME_ID}/agents/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
-    body: JSON.stringify({ name: 'JSBot' })
-  });
+    // 2. Register agent
+    const registerRes = await fetch(`${BASE_URL}/games/${GAME_ID}/agents/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+      body: JSON.stringify({ name: 'JSBot' })
+    });
 
-  if (!registerRes.ok) {
-    const errText = await registerRes.text();
-    console.log(chalk.red(`Failed to register agent. Check API Key. Response: ${errText}`));
-    return;
-  }
+    if (!registerRes.ok) {
+      const errText = await registerRes.text();
+      console.log(chalk.red(`\nFailed to join Room (Might be full / already started). Retrying in 5s...\nResponse: ${errText}`));
+      await sleepAndCheck(5000);
+      continue; // Re-enters the OUTER loop to search for newly opened rooms
+    }
 
   const registerJson = await registerRes.json();
   const agent = registerJson.data || registerJson;
@@ -203,11 +206,13 @@ async function runBotLoop(API_KEY, WALLET_ADDRESS) {
     render();
 
     if (!state.self.isAlive) {
-      addLog(chalk.red('Agent died...'));
+      addLog(chalk.red('Agent died... Preparing to requeue next game in 15s.'));
+      await sleepAndCheck(15000);
       break;
     }
     if (state.gameStatus === 'finished') {
       addLog(chalk.green(`Game over. Winner? ${state.result?.isWinner ? 'Yes' : 'No'} | Rewards: ${state.result?.rewards}`));
+      await sleepAndCheck(15000);
       break;
     }
 
@@ -247,7 +252,9 @@ async function runBotLoop(API_KEY, WALLET_ADDRESS) {
 
     // Replaced standard 60s timeout with interruptible sleep check
     await sleepAndCheck(60000);
-  }
+  } // End of inner Game Loop
+
+  } // End of outer Auto-Join Loop
 }
 
 async function startBot(API_KEY, WALLET_ADDRESS) {
