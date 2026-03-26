@@ -13,6 +13,7 @@ import inquirer from 'inquirer';
 import chalk from 'chalk';
 import fs from 'fs';
 import { ethers } from 'ethers';
+import readline from 'readline';
 
 const ACCOUNTS_FILE = 'accounts.txt';
 const BASE_URL = 'https://cdn.moltyroyale.com/api';
@@ -27,17 +28,17 @@ function checkAccounts() {
 
 // Custom sleep function that checks for early exit
 function sleepAndCheck(ms) {
-    return new Promise(resolve => {
-        let elapsed = 0;
-        const interval = 100;
-        const timer = setInterval(() => {
-            elapsed += interval;
-            if (!global.isBotRunning || elapsed >= ms) {
-                clearInterval(timer);
-                resolve();
-            }
-        }, interval);
-    });
+  return new Promise(resolve => {
+    let elapsed = 0;
+    const interval = 100;
+    const timer = setInterval(() => {
+      elapsed += interval;
+      if (!global.isBotRunning || elapsed >= ms) {
+        clearInterval(timer);
+        resolve();
+      }
+    }, interval);
+  });
 }
 
 function decideAction(state) {
@@ -57,17 +58,74 @@ function decideAction(state) {
   return { type: 'explore' };
 }
 
+// Dashboard Rendering
+function printDashboard(gameName, agentName, agentId, state, actionLogs, errorMsg) {
+  readline.cursorTo(process.stdout, 0, 0);
+  readline.clearScreenDown(process.stdout);
+  console.log(chalk.magenta('╔════════════════════════════════════════╗'));
+  console.log(chalk.magenta('║') + chalk.yellow.bold('     BOT RUNNING: ') + chalk.gray('PRESS s/q TO STOP     ') + chalk.magenta('║'));
+  console.log(chalk.magenta('╚════════════════════════════════════════╝'));
+  const shortAgentId = agentId ? (agentId.length > 12 ? `${agentId.substring(0, 4)}...${agentId.substring(agentId.length - 4)}` : agentId) : 'N/A';
+  console.log(chalk.bold('🎮 Game : ') + chalk.cyan(gameName));
+  console.log(chalk.bold('🧑‍🚀 Agent: ') + chalk.green(agentName) + chalk.gray(` (ID: ${shortAgentId})`));
+
+  if (state) {
+    const { self, currentRegion, gameStatus } = state;
+    const isRunning = gameStatus === 'running';
+    console.log(chalk.bold('Status: ') + (isRunning ? chalk.green('RUNNING') : chalk.yellow(gameStatus.toUpperCase())));
+    console.log(chalk.cyan('-----------------------------------------'));
+
+    const hpColor = self.hp > 50 ? 'green' : (self.hp > 25 ? 'yellow' : 'red');
+    console.log(chalk.bold(`❤️  HP `) + chalk[hpColor](self.hp) + chalk.bold(`  |  ⚡ EP `) + chalk.yellow(self.ep));
+    console.log(chalk.bold(`🗺️  Region: `) + chalk.white(currentRegion?.name || 'Unknown'));
+  } else {
+    console.log(chalk.yellow('\nWaiting for game state...'));
+  }
+
+  console.log(chalk.cyan('-----------------------------------------'));
+  console.log(chalk.bold('Activity Log:'));
+  if (actionLogs.length === 0) console.log(chalk.gray('  (No actions yet)'));
+  actionLogs.forEach(log => console.log('  ' + log));
+
+  if (errorMsg) {
+    console.log(chalk.cyan('-----------------------------------------'));
+    console.log(chalk.red(`[Error] ${errorMsg}`));
+  }
+  console.log(chalk.magenta('=========================================\n'));
+}
+
 // Provided Bot Strategy Logic
 async function runBotLoop(API_KEY, WALLET_ADDRESS) {
-  // 1. Find available game (oldest waiting game)
-  const gamesRes = await fetch(`${BASE_URL}/games?status=waiting`);
-  const { data: games } = await gamesRes.json();
-  if (!games || games.length === 0) {
-    console.log(chalk.yellow('No waiting games available'));
-    return;
+  // 1. Find available game (oldest waiting free game)
+  let GAME_ID = null;
+  let selectedGame = null;
+
+  global.isBotRunning = true;
+  console.log(chalk.cyan('Searching for available free games...'));
+
+  while (global.isBotRunning) {
+    try {
+      const gamesRes = await fetch(`${BASE_URL}/games?status=waiting&entryType=free`);
+      const { data: games } = await gamesRes.json();
+
+      const freeGames = games?.filter(g => g.entryType === 'free') || [];
+
+      if (freeGames.length > 0) {
+        selectedGame = freeGames[0];
+        GAME_ID = selectedGame.id;
+        break; // found a game, break the wait loop
+      }
+
+      process.stdout.write(`\r📡 ${chalk.yellow(`[${new Date().toLocaleTimeString()}] Scanning for FREE tournaments... (Retrying in 10s)`)} `);
+    } catch (err) {
+      process.stdout.write(`\r⚠️  ${chalk.red(`[${new Date().toLocaleTimeString()}] Network error searching games. (Retrying in 10s)`)} `);
+    }
+    await sleepAndCheck(10000);
   }
-  const GAME_ID = games[0].id;
-  console.log(chalk.blue(`Joining game: ${games[0].name} (ID: ${GAME_ID})`));
+
+  if (!global.isBotRunning) return; // User stopped the script
+
+  console.log(chalk.blue(`\nJoining game: ${selectedGame.name} (ID: ${GAME_ID})`));
 
   // 2. Register agent
   const registerRes = await fetch(`${BASE_URL}/games/${GAME_ID}/agents/register`, {
@@ -75,55 +133,99 @@ async function runBotLoop(API_KEY, WALLET_ADDRESS) {
     headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
     body: JSON.stringify({ name: 'JSBot' })
   });
-  
+
   if (!registerRes.ok) {
     const errText = await registerRes.text();
     console.log(chalk.red(`Failed to register agent. Check API Key. Response: ${errText}`));
     return;
   }
-  
-  const { data: agent } = await registerRes.json();
-  const AGENT_ID = agent.id;
-  console.log(chalk.green(`Registered: ${agent.name}`));
+
+  const registerJson = await registerRes.json();
+  const agent = registerJson.data || registerJson;
+  let AGENT_ID = agent.id || agent.agentId;
+
+  // Fallback to fetch from accounts/me if ID is numeric
+  if (AGENT_ID && AGENT_ID.toString().match(/^\d+$/)) {
+    const accRes = await fetch(`${BASE_URL}/accounts/me`, { headers: { 'X-API-Key': API_KEY } });
+    if (accRes.ok) {
+      const accData = (await accRes.json()).data;
+      const current = accData?.currentGames?.find(g => g.gameId === GAME_ID);
+      if (current && current.agentId) {
+        AGENT_ID = current.agentId;
+      }
+    }
+  }
+
+  if (!AGENT_ID) {
+    console.log(chalk.red('Could not determine Agent ID.'));
+    return;
+  }
+  let actionLogs = [];
+  let lastError = null;
+  let currentState = null;
+
+  function render() {
+    if (!global.isBotRunning) return;
+    printDashboard(selectedGame.name, agent.name || 'Bot', AGENT_ID, currentState, actionLogs, lastError);
+  }
+
+  function addLog(msg) {
+    if (!global.isBotRunning) return;
+    const time = new Date().toLocaleTimeString();
+    actionLogs.push(`[${time}] ${msg}`);
+    if (actionLogs.length > 8) actionLogs.shift();
+    render();
+  }
+
+  function setError(msg) {
+    lastError = msg;
+    render();
+  }
+
+  addLog(chalk.green(`Registered to game successfully.`));
 
   // 3. Game loop (interruptible by user keypress)
   global.isBotRunning = true;
   while (global.isBotRunning) {
-    const stateRes = await fetch(`${BASE_URL}/games/${GAME_ID}/agents/${AGENT_ID}/state`);
-    
+    const stateRes = await fetch(`${BASE_URL}/games/${GAME_ID}/agents/${AGENT_ID}/state`, {
+      headers: { 'X-API-Key': API_KEY }
+    });
+
     if (!stateRes.ok) {
-        console.log(chalk.red(`Failed to fetch state: ${stateRes.statusText}`));
-        await sleepAndCheck(5000);
-        continue;
+      setError(`Failed to fetch state: ${stateRes.statusText}`);
+      await sleepAndCheck(5000);
+      continue;
     }
 
     const { data: state } = await stateRes.json();
+    currentState = state;
+    lastError = null; // clear error on success
+    render();
 
     if (!state.self.isAlive) {
-      console.log(chalk.red('Agent died...'));
+      addLog(chalk.red('Agent died...'));
       break;
     }
     if (state.gameStatus === 'finished') {
-      console.log(chalk.green('Game over. Winner:'), state.result?.isWinner, chalk.yellow('Rewards:'), state.result?.rewards);
+      addLog(chalk.green(`Game over. Winner? ${state.result?.isWinner ? 'Yes' : 'No'} | Rewards: ${state.result?.rewards}`));
       break;
     }
 
-    const { self, currentRegion, visibleAgents, visibleItems, recentMessages } = state;
+    const { self, currentRegion, visibleItems } = state;
 
     // === FREE ACTIONS ===
-    for (const msg of recentMessages || []) {
-      if (msg.content?.startsWith('[저주]') && msg.senderId !== AGENT_ID) {
-        console.log(chalk.gray('Curse detected, ignoring LLM for simple script...'));
-      }
-    }
-
     for (const entry of visibleItems || []) {
       if (entry.regionId === self.regionId) {
-        await fetch(`${BASE_URL}/games/${GAME_ID}/agents/${AGENT_ID}/action`, {
+        addLog(chalk.gray(`Attempting pickup: item ${entry.item?.name || entry.item?.id}`));
+        const pickupRes = await fetch(`${BASE_URL}/games/${GAME_ID}/agents/${AGENT_ID}/action`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: { type: 'pickup', itemId: entry.item.id } })
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+          body: JSON.stringify({ type: 'pickup', itemId: entry.item.id })
         });
+        if (pickupRes.ok) {
+          const resData = await pickupRes.json();
+          addLog(chalk.yellow(`Picked up item! ${resData.message || ''}`));
+        }
       }
     }
 
@@ -132,18 +234,15 @@ async function runBotLoop(API_KEY, WALLET_ADDRESS) {
 
     const actionRes = await fetch(`${BASE_URL}/games/${GAME_ID}/agents/${AGENT_ID}/action`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action,
-        thought: { reasoning: `HP:${self.hp} EP:${self.ep}`, plannedAction: action.type }
-      })
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+      body: JSON.stringify(action)
     });
-    
+
     if (actionRes.ok) {
-        const result = await actionRes.json();
-        console.log(`[Turn] ${chalk.cyan(action.type)} - ${result.message || ''}`);
+      const result = await actionRes.json();
+      addLog(`${chalk.cyan(action.type)} - ${result.message || ''}`);
     } else {
-        console.log(chalk.red(`[Turn] Action failed: ${actionRes.statusText}`));
+      setError(`Action failed: ${actionRes.statusText}`);
     }
 
     // Replaced standard 60s timeout with interruptible sleep check
@@ -152,10 +251,6 @@ async function runBotLoop(API_KEY, WALLET_ADDRESS) {
 }
 
 async function startBot(API_KEY, WALLET_ADDRESS) {
-  console.log(chalk.magenta('\n========================================='));
-  console.log(chalk.magenta('   BOT RUNNING - PRESS s or q TO STOP'));
-  console.log(chalk.magenta('=========================================\n'));
-
   // Setup raw standard input logging separation & graceful stop
   const stdin = process.stdin;
   if (stdin.isTTY) {
@@ -185,16 +280,13 @@ async function startBot(API_KEY, WALLET_ADDRESS) {
     console.error(chalk.red('Error in bot loop:'), err);
   } finally {
     if (stdin.isTTY && global.isBotRunning) {
-        stdin.setRawMode(false);
+      stdin.setRawMode(false);
     }
     stdin.removeListener('data', keypressListener);
     stdin.pause();
     global.isBotRunning = false;
   }
 
-  console.log(chalk.magenta('\n========================================='));
-  console.log(chalk.magenta('              BOT STOPPED'));
-  console.log(chalk.magenta('=========================================\n'));
 
   await mainMenu();
 }
@@ -222,7 +314,7 @@ async function createAccount() {
       console.log(chalk.red(`Response: ${errText}\n`));
       return await mainMenu();
     }
-    
+
     const resBase = await response.json();
     const data = resBase.data || resBase;
 
@@ -233,6 +325,8 @@ async function createAccount() {
     console.log(chalk.bold('Balance: ') + chalk.yellow(data.balance !== undefined ? data.balance : 0));
     console.log(chalk.green('-----------------------\n'));
 
+    const apiKey = data.apiKey || data.api_key;
+
     if (!apiKey) {
       console.log(chalk.red('API Key was not returned by the server. Account not saved.\n'));
       return await mainMenu();
@@ -241,7 +335,7 @@ async function createAccount() {
     // Format: API_KEY||WALLET_ADDRESS||PRIVATE_KEY|
     const line = `${apiKey}||${walletAddress}||${wallet.privateKey}|`;
     fs.appendFileSync(ACCOUNTS_FILE, line + '\n');
-    
+
     console.log(chalk.cyan(`Saved to ${ACCOUNTS_FILE} successfully.`));
     console.log(chalk.yellow(`⚠ Please backup the Private Key securely if you plan to use this EVM wallet!\n`));
   } catch (err) {
@@ -269,8 +363,15 @@ async function playAgent() {
     // Expected strict format: API_KEY||WALLET_ADDRESS||PRIVATE_KEY|
     const parts = line.split('||');
     const api_key = parts[0];
-    const wallet = parts[1] ? parts[1].replace('|', '') : '';
-    return { name: `Wallet: ${wallet || 'Unknown'} (Key: ${api_key.substring(0,6)}...)`, value: { api_key, wallet } };
+    const rawWallet = parts[1] ? parts[1].replace('|', '') : '';
+
+    // Obscure wallet & key
+    const displayWallet = rawWallet ? `${rawWallet.substring(0, 6)}...${rawWallet.substring(rawWallet.length - 4)}` : 'Unknown';
+    const displayKey = api_key.length > 10 ? `${api_key.substring(0, 8)}...${api_key.substring(api_key.length - 4)}` : api_key;
+
+    const choiceName = `🧑‍🚀 Agent: ${chalk.green(displayWallet)}  🔑 Key: ${chalk.yellow(displayKey)}`;
+
+    return { name: choiceName, value: { api_key, wallet: rawWallet } };
   });
 
   choices.push({ name: 'Cancel', value: null });
@@ -317,12 +418,12 @@ async function mainMenu() {
 }
 
 async function start() {
-    console.clear();
-    console.log(chalk.cyan.bold('========================================='));
-    console.log(chalk.cyan.bold('       Molty Royale CLI Manager'));
-    console.log(chalk.cyan.bold('=========================================\n'));
-    checkAccounts();
-    await mainMenu();
+  console.clear();
+  console.log(chalk.cyan.bold('╔════════════════════════════════════════╗'));
+  console.log(chalk.cyan.bold('║') + chalk.yellow.bold('          MOLTY ROYALE CLI BOT          ') + chalk.cyan.bold('║'));
+  console.log(chalk.cyan.bold('╚════════════════════════════════════════╝\n'));
+  checkAccounts();
+  await mainMenu();
 }
 
 start();
