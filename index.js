@@ -200,15 +200,17 @@ async function startBot(API_KEY, WALLET_ADDRESS) {
 
 async function createAccount() {
   const answers = await inquirer.prompt([
-    { type: 'input', name: 'botName', message: 'Enter Bot Name:' },
-    { type: 'input', name: 'walletAddress', message: 'Enter Wallet Address:' }
+    { type: 'input', name: 'botName', message: 'Enter Bot Name:' }
   ]);
+
+  // Use the dummy wallet address as requested for the payload
+  const walletAddress = "0xYourAgentEOA";
 
   try {
     const response = await fetch(`${BASE_URL}/accounts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: answers.botName, wallet_address: answers.walletAddress })
+      body: JSON.stringify({ name: answers.botName, wallet_address: walletAddress })
     });
     
     // Attempt gracefully parsing the json response 
@@ -224,7 +226,7 @@ async function createAccount() {
 
     const apiKey = data.apiKey || data.api_key || data.key || data.id || 'GENERATED_API_KEY';
 
-    const line = `${apiKey}||${answers.walletAddress}|`;
+    const line = `${apiKey}||${walletAddress}|`;
     fs.appendFileSync(ACCOUNTS_FILE, line + '\n');
     console.log(chalk.cyan(`Saved to ${ACCOUNTS_FILE} successfully.`));
 
