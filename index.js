@@ -203,7 +203,8 @@ async function createAccount() {
     { type: 'input', name: 'botName', message: 'Enter Bot Name:' }
   ]);
 
-  const walletAddress = "0xYourAgentEOA";
+  // Automatically generate a valid random EVM dummy address
+  const walletAddress = '0x' + [...Array(40)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
 
   try {
     const response = await fetch(`${BASE_URL}/accounts`, {
